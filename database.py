@@ -46,6 +46,26 @@ def init_db() -> None:
                 justification_forcage TEXT,
                 FOREIGN KEY (scenario_id) REFERENCES scenarios_auc(id)
             );
+
+            CREATE TABLE IF NOT EXISTS utilisateurs (
+                username           TEXT PRIMARY KEY,
+                password_hash      TEXT NOT NULL,
+                role               TEXT NOT NULL CHECK(role IN ('admin', 'medecin_nucleaire')),
+                nom_complet        TEXT,
+                date_creation      TEXT,
+                derniere_connexion TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT NOT NULL,
+                utilisateur TEXT,
+                role        TEXT,
+                action      TEXT NOT NULL,
+                module      TEXT,
+                details     TEXT,
+                demande_id  TEXT
+            );
             """
         )
         _migrate_demandes(conn)

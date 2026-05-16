@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 import aide
+import auth
 import chercheur
 import init_app
 import medecin_nucleaire
@@ -88,6 +89,8 @@ module = st.sidebar.radio(
     ("Accueil", "Prescripteur", "Médecin Nucléaire", "Chercheur", "Référentiel", "📖 Aide & Documentation"),
 )
 
+auth.render_sidebar_status()
+
 if module == "Accueil":
     st.markdown(
         """
@@ -112,9 +115,19 @@ elif module == "Référentiel":
 elif module == "Prescripteur":
     prescripteur.render()
 elif module == "Médecin Nucléaire":
-    medecin_nucleaire.render()
+    if auth.require_role(["admin", "medecin_nucleaire"]):
+        medecin_nucleaire.render()
+    elif auth.is_authenticated():
+        auth.render_access_denied("administrateurs ou médecins nucléaires")
+    else:
+        auth.render_login_form("le module Médecin Nucléaire")
 elif module == "Chercheur":
-    chercheur.render()
+    if auth.require_role(["admin"]):
+        chercheur.render()
+    elif auth.is_authenticated():
+        auth.render_access_denied("administrateurs")
+    else:
+        auth.render_login_form("le module Chercheur")
 elif module == "📖 Aide & Documentation":
     aide.render()
 else:

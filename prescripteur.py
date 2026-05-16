@@ -7,6 +7,7 @@ from datetime import datetime
 
 import streamlit as st
 
+from auth import log_action
 from database import get_connection
 from scoring import calculer_ppt, match_scenario
 
@@ -102,6 +103,25 @@ def _render_etape1() -> None:
 
     st.text_input("N° anonymisé", value=st.session_state.patient_id, disabled=True)
 
+    st.markdown("**Prescripteur (obligatoire pour traçabilité)**")
+    col_nom, col_spec = st.columns([2, 2])
+    with col_nom:
+        nom_prescripteur = st.text_input(
+            "Nom du prescripteur",
+            key="p_nom_prescripteur",
+            placeholder="Prénom Nom",
+            help="Nom du médecin prescrivant la TMP — minimum 3 caractères",
+        )
+    with col_spec:
+        specialite = st.selectbox(
+            "Spécialité",
+            SPECIALITES,
+            index=None,
+            placeholder="Sélectionner…",
+            key="p_specialite",
+        )
+
+    st.markdown("**Patient**")
     col_a, col_b, col_c = st.columns([2, 1, 2])
     with col_a:
         age = st.slider("Âge (ans)", 18, 100, 60, key="p_age")
@@ -112,17 +132,12 @@ def _render_etape1() -> None:
 
     fdr = st.multiselect("Facteurs de risque cardiovasculaires", FDR_OPTIONS, key="p_fdr")
     atcd = st.multiselect("Antécédents cardiaques", ATCD_OPTIONS, key="p_atcd")
-    specialite = st.selectbox(
-        "Spécialité du prescripteur",
-        SPECIALITES,
-        index=None,
-        placeholder="Sélectionner…",
-        key="p_specialite",
-    )
 
     st.divider()
     if st.button("Étape suivante →", type="primary"):
         manquants = []
+        if not nom_prescripteur or len(nom_prescripteur.strip()) < 3:
+            manquants.append("nom du prescripteur (≥3 caractères)")
         if sexe is None:
             manquants.append("sexe")
         if specialite is None:
@@ -132,12 +147,14 @@ def _render_etape1() -> None:
         else:
             st.session_state.patient_data = {
                 "patient_id": st.session_state.patient_id,
+                "prescripteur_nom": nom_prescripteur.strip(),
+                "prescripteur_specialite": specialite,
+                "specialite": specialite,  # alias legacy pour modules existants
                 "age": age,
                 "sexe": sexe,
                 "imc": imc,
                 "fdr": fdr,
                 "atcd": atcd,
-                "specialite": specialite,
             }
             st.session_state.etape = 2
             st.rerun()
@@ -147,7 +164,10 @@ def _render_etape1() -> None:
 def _render_etape2() -> None:
     st.subheader("Étape 2 — Triage contextuel")
     p = st.session_state.patient_data
-    st.markdown(f"**Patient {p['patient_id']}** — {p['age']} ans, {p['sexe']}, {p['specialite']}")
+    st.markdown(
+        f"**Patient {p['patient_id']}** — {p['age']} ans, {p['sexe']} · "
+        f"Prescripteur : {p['prescripteur_nom']} ({p['prescripteur_specialite']})"
+    )
 
     contexte = st.radio(
         "Quelle est la situation clinique ?",
@@ -525,6 +545,13 @@ def _render_alerte_alara(row) -> None:
     with col1:
         st.markdown("**Action recommandée**")
         if st.button("✗ Annuler la demande", type="primary"):
+            patient_id = st.session_state.patient_data.get("patient_id", "?")
+            sid = st.session_state.get("scenario_id", "?")
+            log_action(
+                "Annulation alerte ALARA", "Prescripteur",
+                f"Patient: {patient_id}, Scénario: {sid}, Score: {score}/9",
+                None,
+            )
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
@@ -560,8 +587,9 @@ def _render_etape5() -> None:
     st.success(f"✅ Demande {st.session_state.demande_id} soumise avec succès")
     p = st.session_state.patient_data
     st.markdown(f"- **Patient** : {p['patient_id']} ({p['age']} ans, {p['sexe']})")
+    st.markdown(f"- **Prescripteur** : {p['prescripteur_nom']} ({p['prescripteur_specialite']})")
     st.markdown(f"- **Scénario** : {st.session_state.scenario_id}")
-    st.markdown(f"- **Statut** : En attente (sera traité par le médecin nucléaire)")
+    st.markdown("- **Statut** : En attente (sera traité par le médecin nucléaire)")
     st.markdown(f"- **Temps total de saisie** : {st.session_state.demande_duration:.1f} s")
     if st.session_state.get("forcage_justification"):
         st.warning(
@@ -583,6 +611,7 @@ def _persist_demande() -> None:
 
     demande_id = f"DEM-{end_time.strftime('%Y%m%d-%H%M%S')}-{random.randint(100, 999)}"
     sid = st.session_state.scenario_id
+    p = st.session_state.patient_data
 
     with get_connection() as conn:
         row = conn.execute(
@@ -590,7 +619,7 @@ def _persist_demande() -> None:
         ).fetchone()
 
         donnees = {
-            **st.session_state.patient_data,
+            **p,
             "contexte": st.session_state.contexte,
             "reponses": st.session_state.reponses,
             "start_time": st.session_state.start_time,
@@ -606,7 +635,7 @@ def _persist_demande() -> None:
             (
                 demande_id,
                 end_time.isoformat(timespec="seconds"),
-                st.session_state.patient_data["specialite"],
+                p["prescripteur_specialite"],
                 json.dumps(donnees, ensure_ascii=False),
                 sid,
                 row["score_auc"],
@@ -618,3 +647,18 @@ def _persist_demande() -> None:
 
     st.session_state.demande_id = demande_id
     st.session_state.demande_duration = duration
+
+    # Traçabilité : log d'audit
+    log_action(
+        "Soumission demande",
+        "Prescripteur",
+        f"Par: {p['prescripteur_nom']} ({p['prescripteur_specialite']}), "
+        f"Score={row['score_auc']}/9, Class={row['classification']}, "
+        f"Forçage={'oui' if forcage else 'non'}",
+        demande_id,
+    )
+    if forcage:
+        log_action(
+            "Forçage RA", "Prescripteur",
+            f"Justif: {forcage}", demande_id,
+        )

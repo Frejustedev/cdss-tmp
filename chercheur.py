@@ -13,6 +13,7 @@ import streamlit as st
 from scipy import stats as scipy_stats
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
 
+from auth import log_action
 from database import get_connection
 
 CLASSIFICATIONS = ["A", "MBA", "RA"]
@@ -52,6 +53,7 @@ def render() -> None:
         "Analyses détaillées",
         "Concordance & contournement",
         "Exports",
+        "🔍 Audit Log",
     ])
 
     with tabs[0]:
@@ -64,6 +66,8 @@ def render() -> None:
         _onglet_concordance(df)
     with tabs[4]:
         _onglet_exports(df, df_all)
+    with tabs[5]:
+        _onglet_audit_log()
 
 
 # ===== Filtre global =====
@@ -123,9 +127,22 @@ def _render_gestion_phases() -> None:
             else:
                 ids = [id_map[s] for s in selected]
                 with get_connection() as conn:
+                    olds = {
+                        r["id"]: r["phase_etude"]
+                        for r in conn.execute(
+                            f"SELECT id, phase_etude FROM demandes "
+                            f"WHERE id IN ({','.join('?' * len(ids))})",
+                            ids,
+                        )
+                    }
                     conn.executemany(
                         "UPDATE demandes SET phase_etude = ? WHERE id = ?",
                         [(new_phase, i) for i in ids],
+                    )
+                for did in ids:
+                    log_action(
+                        "Modification phase étude", "Chercheur",
+                        f"{olds.get(did, 'NULL')} → {new_phase}", did,
                     )
                 st.success(f"{len(ids)} demande(s) marquée(s) comme {new_phase}.")
                 st.rerun()
@@ -751,30 +768,102 @@ def _onglet_exports(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
         "Feuilles : Demandes (données brutes + JSON déplié) · Statistiques · "
         "Phase1_vs_Phase3 · Forcages"
     )
-    excel_bytes = _build_excel_export(df_all if not df_all.empty else df)
-    st.download_button(
+    src = df_all if not df_all.empty else df
+    excel_bytes = _build_excel_export(src)
+    if st.download_button(
         "📥 Télécharger Excel complet",
         data=excel_bytes,
         file_name=f"CDSS-TMP_export_{ts}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    ):
+        log_action("Export Excel", "Chercheur", f"{len(src)} demandes", None)
 
     st.markdown("### 📊 2. Export CSV brut")
     st.caption("Une feuille unique avec toutes les colonnes — pour R / SPSS / Python externe.")
-    csv_bytes = (df if not df.empty else df_all).to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
+    src_csv = df if not df.empty else df_all
+    csv_bytes = src_csv.to_csv(index=False).encode("utf-8-sig")
+    if st.download_button(
         "📊 Télécharger CSV",
         data=csv_bytes,
         file_name=f"CDSS-TMP_brut_{ts}.csv",
         mime="text/csv",
-    )
+    ):
+        log_action("Export CSV", "Chercheur", f"{len(src_csv)} demandes", None)
 
     st.markdown("### 📄 3. Rapport HTML synthétique")
     st.caption("Téléchargez le HTML puis Ctrl+P → « Enregistrer en PDF » dans le navigateur.")
-    html = _build_html_report(df_all if not df_all.empty else df)
-    st.download_button(
+    src_html = df_all if not df_all.empty else df
+    html = _build_html_report(src_html)
+    if st.download_button(
         "📄 Télécharger HTML",
         data=html.encode("utf-8"),
         file_name=f"CDSS-TMP_rapport_{ts}.html",
         mime="text/html",
+    ):
+        log_action("Export HTML", "Chercheur", f"{len(src_html)} demandes", None)
+
+
+def _onglet_audit_log() -> None:
+    """Onglet Audit Log — visible uniquement par les admins (filtré par auth dans app.py)."""
+    st.subheader("🔍 Audit Log")
+    st.caption(
+        "Trace de toutes les actions sensibles : connexions, soumissions, "
+        "validations, rejets, reclassements, modifications de phase, exports."
     )
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM audit_log ORDER BY timestamp DESC"
+        ).fetchall()
+
+    if not rows:
+        st.info("Aucune action loguée pour le moment.")
+        return
+
+    df = pd.DataFrame([dict(r) for r in rows])
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        date_debut = st.date_input("Du", value=None, key="audit_dd")
+    with col2:
+        date_fin = st.date_input("Au", value=None, key="audit_df")
+    with col3:
+        users = sorted({u for u in df["utilisateur"].dropna().tolist()})
+        user_filter = st.selectbox("Utilisateur", ["Tous"] + users, key="audit_user")
+    with col4:
+        modules = sorted({m for m in df["module"].dropna().tolist()})
+        module_filter = st.selectbox("Module", ["Tous"] + modules, key="audit_module")
+    with col5:
+        actions = sorted({a for a in df["action"].dropna().tolist()})
+        action_filter = st.selectbox("Action", ["Toutes"] + actions, key="audit_action")
+
+    filtered = df.copy()
+    if date_debut:
+        filtered = filtered[pd.to_datetime(filtered["timestamp"]).dt.date >= date_debut]
+    if date_fin:
+        filtered = filtered[pd.to_datetime(filtered["timestamp"]).dt.date <= date_fin]
+    if user_filter != "Tous":
+        filtered = filtered[filtered["utilisateur"] == user_filter]
+    if module_filter != "Tous":
+        filtered = filtered[filtered["module"] == module_filter]
+    if action_filter != "Toutes":
+        filtered = filtered[filtered["action"] == action_filter]
+
+    st.caption(f"{len(filtered)} action(s) sur {len(df)} totale(s)")
+    st.dataframe(
+        filtered[["timestamp", "utilisateur", "role", "action", "module",
+                  "details", "demande_id"]],
+        use_container_width=True, hide_index=True,
+    )
+
+    csv = filtered.to_csv(index=False).encode("utf-8-sig")
+    if st.download_button(
+        "📥 Export Audit Log CSV",
+        data=csv,
+        file_name=f"audit_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+    ):
+        log_action(
+            "Export Audit Log", "Chercheur",
+            f"{len(filtered)} lignes", None,
+        )

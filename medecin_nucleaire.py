@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from auth import log_action
 from database import get_connection
 
 EMOJI_CLASSIF = {"A": "🟢", "MBA": "🟡", "RA": "🔴"}
@@ -48,7 +49,6 @@ def render() -> None:
     _render_export(demandes)
 
 
-# ===== Zone 1 — Métriques =====
 def _render_metrics() -> None:
     with get_connection() as conn:
         total = conn.execute(
@@ -80,7 +80,6 @@ def _render_metrics() -> None:
         st.metric("🔴 Rarely Appropriate", fmt(counts["RA"]))
 
 
-# ===== Zone 2 — Filtres =====
 def _render_filtres():
     col_statut, col_tri = st.columns([2, 3])
     with col_statut:
@@ -110,7 +109,6 @@ def _render_filtres():
     return filtre_statut, filtres_classif, tri
 
 
-# ===== Récupération des demandes =====
 def _fetch_demandes(filtre_statut: str, filtres_classif: list[str], tri: str):
     if not filtres_classif:
         return []
@@ -152,7 +150,6 @@ def _fetch_demandes(filtre_statut: str, filtres_classif: list[str], tri: str):
         return conn.execute(sql, params).fetchall()
 
 
-# ===== Zone 3 — Carte de demande =====
 def _render_demande(d) -> None:
     classif_effective = d["classification_medecin"] or d["classification"] or "A"
     emoji = EMOJI_CLASSIF.get(classif_effective, "⚪")
@@ -163,10 +160,6 @@ def _render_demande(d) -> None:
     )
 
     with st.expander(titre, expanded=False):
-        # Marquage timestamp_ouverture (première apparition à l'écran).
-        # Limitation : Streamlit n'expose pas l'état ouvert/fermé d'un expander ;
-        # on marque donc dès le rendu (= dès que la demande passe sous les yeux
-        # du médecin), ce qui sert de proxy au "premier examen".
         if d["timestamp_ouverture"] is None:
             now_iso = datetime.now().isoformat(timespec="seconds")
             with get_connection() as conn:
@@ -193,7 +186,9 @@ def _render_demande(d) -> None:
             atcd = donnees.get("atcd") or []
             st.markdown(f"- FDR : {', '.join(fdr) if fdr else 'aucun signalé'}")
             st.markdown(f"- ATCD : {', '.join(atcd) if atcd else 'aucun signalé'}")
-            st.markdown(f"- Prescripteur : {donnees.get('specialite', '—')}")
+            nom_presc = donnees.get("prescripteur_nom") or "—"
+            spec = donnees.get("prescripteur_specialite") or donnees.get("specialite") or "—"
+            st.markdown(f"- Prescripteur : **{nom_presc}** ({spec})")
 
             st.markdown("**Données cliniques saisies**")
             reponses = donnees.get("reponses") or {}
@@ -368,6 +363,25 @@ def _perform_action(d, statut: str, commentaire: str | None, reclass: str | None
             ),
         )
 
+    # Traçabilité
+    if reclass:
+        log_action(
+            "Reclassement demande", "Médecin Nucléaire",
+            f"De {d['classification']} vers {reclass}: {commentaire}",
+            d["id"],
+        )
+    elif statut == "Rejetée":
+        log_action(
+            "Rejet demande", "Médecin Nucléaire",
+            f"Motif: {commentaire}",
+            d["id"],
+        )
+    elif statut == "Validée":
+        log_action(
+            "Validation demande", "Médecin Nucléaire",
+            "", d["id"],
+        )
+
 
 def _render_decision_info(d) -> None:
     statut = d["statut"]
@@ -408,7 +422,6 @@ def _render_protocole(donnees: dict) -> None:
     st.markdown(f"- Activité suggérée : **{ACTIVITES_TMC}**")
 
 
-# ===== Export CSV =====
 def _render_export(demandes) -> None:
     rows = [{
         "id": d["id"],
@@ -429,9 +442,10 @@ def _render_export(demandes) -> None:
     df = pd.DataFrame(rows)
     csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
     filename = f"demandes_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    st.download_button(
+    if st.download_button(
         "📥 Exporter en CSV",
         data=csv_bytes,
         file_name=filename,
         mime="text/csv",
-    )
+    ):
+        log_action("Export CSV", "Médecin Nucléaire", f"{len(rows)} lignes", None)
