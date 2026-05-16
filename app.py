@@ -4,6 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+import aide
 import chercheur
 import init_app
 import medecin_nucleaire
@@ -84,7 +85,7 @@ st.title("CDSS-TMP — Évaluation des prescriptions de TMP")
 st.sidebar.title("Menu")
 module = st.sidebar.radio(
     "Modules",
-    ("Accueil", "Prescripteur", "Médecin Nucléaire", "Chercheur", "Référentiel"),
+    ("Accueil", "Prescripteur", "Médecin Nucléaire", "Chercheur", "Référentiel", "📖 Aide & Documentation"),
 )
 
 if module == "Accueil":
@@ -114,6 +115,8 @@ elif module == "Médecin Nucléaire":
     medecin_nucleaire.render()
 elif module == "Chercheur":
     chercheur.render()
+elif module == "📖 Aide & Documentation":
+    aide.render()
 else:
     st.header(f"Module {module}")
     st.info("Module en cours de développement.")
