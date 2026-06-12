@@ -16,6 +16,7 @@ import re
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 
 # Schéma dédié au CDSS dans la base Supabase (isolé de la table patients).
 SCHEMA = "cdss"
@@ -114,19 +115,46 @@ class _CursorWrapper:
         self._cur.close()
 
 
-class _ConnectionWrapper:
-    """Connexion psycopg2, interface compatible sqlite3 + context manager."""
+# Erreurs psycopg2 indiquant une connexion morte/périmée (Supabase ferme les
+# connexions inactives) → on reconnecte et on réessaie une fois.
+_TRANSIENT_ERRORS = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
-    def __init__(self, conn):
+
+class _ConnectionWrapper:
+    """Connexion empruntée au pool, interface compatible sqlite3 + context manager.
+
+    À la sortie du bloc « with » (ou au close()), la connexion est RENDUE au
+    pool (et non fermée), pour éviter de repayer un handshake TLS à chaque requête.
+    """
+
+    def __init__(self, conn, pool):
         self._conn = conn
+        self._pool = pool
+
+    def _reconnect(self) -> None:
+        try:
+            self._pool.putconn(self._conn, close=True)
+        except Exception:
+            pass
+        self._conn = self._pool.getconn()
 
     def execute(self, query, params=None):
-        cur = _CursorWrapper(self._conn.cursor())
-        return cur.execute(query, params)
+        for attempt in (1, 2):
+            try:
+                return _CursorWrapper(self._conn.cursor()).execute(query, params)
+            except _TRANSIENT_ERRORS:
+                if attempt == 2:
+                    raise
+                self._reconnect()
 
     def executemany(self, query, seq_of_params):
-        cur = _CursorWrapper(self._conn.cursor())
-        return cur.executemany(query, seq_of_params)
+        for attempt in (1, 2):
+            try:
+                return _CursorWrapper(self._conn.cursor()).executemany(query, seq_of_params)
+            except _TRANSIENT_ERRORS:
+                if attempt == 2:
+                    raise
+                self._reconnect()
 
     def cursor(self):
         return _CursorWrapper(self._conn.cursor())
@@ -137,36 +165,66 @@ class _ConnectionWrapper:
     def rollback(self):
         self._conn.rollback()
 
+    def _release(self) -> None:
+        """Rend la connexion au pool, transaction nettoyée."""
+        if self._conn is None:
+            return
+        try:
+            self._conn.rollback()  # purge toute transaction restée ouverte
+        except Exception:
+            pass
+        try:
+            self._pool.putconn(self._conn)
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._conn = None
+
     def close(self):
-        self._conn.close()
+        self._release()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._conn.commit()
-        else:
-            self._conn.rollback()
-        self._conn.close()
+        try:
+            if exc_type is None:
+                self._conn.commit()
+        except Exception:
+            pass
+        self._release()
         return False
 
 
-def get_connection() -> _ConnectionWrapper:
-    """Retourne une connexion à la base Supabase, accès par nom de colonne.
+_pool = None
 
-    Interface compatible avec l'ancien code SQLite : get_connection().execute(...),
-    fetchone()/fetchall() renvoient des dict-like indexables par nom de colonne,
-    et le bloc « with » committe automatiquement.
+
+def _get_pool():
+    """Pool de connexions partagé (créé paresseusement, persiste entre reruns)."""
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            1, 12,
+            dsn=_get_dsn(),
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+    return _pool
+
+
+def get_connection() -> _ConnectionWrapper:
+    """Emprunte une connexion au pool Supabase (réutilisée, sans re-handshake).
+
+    Interface compatible SQLite : get_connection().execute(...), fetchone()/
+    fetchall() renvoient des dict-like indexables par nom OU index, et le bloc
+    « with » committe automatiquement puis rend la connexion au pool.
+
+    Le schéma `cdss` est ciblé directement par _adapt_query (préfixe des tables),
+    donc aucun `SET search_path` n'est nécessaire (économise un aller-retour).
     """
-    conn = psycopg2.connect(
-        _get_dsn(),
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
-    with conn.cursor() as c:
-        c.execute(f"SET search_path TO {SCHEMA}, public")
-    conn.commit()
-    return _ConnectionWrapper(conn)
+    pool = _get_pool()
+    return _ConnectionWrapper(pool.getconn(), pool)
 
 
 def init_db() -> None:

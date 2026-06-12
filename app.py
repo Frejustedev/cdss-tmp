@@ -21,7 +21,10 @@ CLASSIFICATION_COLORS = {
 CATEGORIES = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_scenarios() -> pd.DataFrame:
+    # Scénarios statiques (50 lignes) → mis en cache 1 h pour éviter une
+    # requête distante à chaque affichage du Référentiel.
     # pd.read_sql_query ne fonctionne pas avec le shim de connexion PostgreSQL
     # (pas d'API DBAPI complète) → on charge manuellement via fetchall.
     cols = ["id", "categorie", "contexte_clinique", "variables_cles",
@@ -78,12 +81,20 @@ def render_referentiel() -> None:
         )
 
 
-init_app.ensure_initialized()
+@st.cache_resource(show_spinner="Initialisation de la base…")
+def _bootstrap_db():
+    """Initialise la base (tables + scénarios + comptes) UNE SEULE FOIS par
+    process, et non à chaque rerun Streamlit (sinon ~16 s de latence par clic)."""
+    init_app.ensure_initialized()
+    return True
+
 
 st.set_page_config(
     page_title="CDSS-TMP",
     layout="wide",
 )
+
+_bootstrap_db()
 
 st.title("CDSS-TMP — Évaluation des prescriptions de TMP")
 
