@@ -155,6 +155,9 @@ def _render_gestion_phases() -> None:
 def _parse_donnees(s):
     if not s:
         return {}
+    # PostgreSQL JSONB renvoie déjà un dict ; SQLite renvoyait une string.
+    if isinstance(s, dict):
+        return s
     try:
         return json.loads(s)
     except (json.JSONDecodeError, TypeError):

@@ -80,13 +80,23 @@ def seed_scenarios():
     init_db()
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM scenarios_auc")
+    # Upsert : insère ou met à jour, sans supprimer (préserve les demandes liées).
     cur.executemany(
-        "INSERT INTO scenarios_auc (id, categorie, contexte_clinique, variables_cles, score_auc, classification, source, note_clinique, classe_esc, reference_esc, conformite_esc, divergence_esc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scenarios_auc (id, categorie, contexte_clinique, variables_cles, "
+        "score_auc, classification, source, note_clinique, classe_esc, reference_esc, "
+        "conformite_esc, divergence_esc) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (id) DO UPDATE SET "
+        "categorie=EXCLUDED.categorie, contexte_clinique=EXCLUDED.contexte_clinique, "
+        "variables_cles=EXCLUDED.variables_cles, score_auc=EXCLUDED.score_auc, "
+        "classification=EXCLUDED.classification, source=EXCLUDED.source, "
+        "note_clinique=EXCLUDED.note_clinique, classe_esc=EXCLUDED.classe_esc, "
+        "reference_esc=EXCLUDED.reference_esc, conformite_esc=EXCLUDED.conformite_esc, "
+        "divergence_esc=EXCLUDED.divergence_esc",
         SCENARIOS
     )
     conn.commit()
-    count = cur.execute("SELECT COUNT(*) FROM scenarios_auc").fetchone()[0]
+    count = cur.execute("SELECT COUNT(*) AS n FROM scenarios_auc").fetchone()["n"]
     conn.close()
     print(f"Scénarios insérés : {count}")
 

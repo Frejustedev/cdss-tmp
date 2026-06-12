@@ -1,10 +1,9 @@
 """Initialisation automatique au premier démarrage (tables + scénarios + comptes)."""
 from datetime import datetime
-from pathlib import Path
 
 import bcrypt
 
-from database import DB_PATH, get_connection, init_db
+from database import get_connection, init_db
 
 # Comptes par défaut créés au premier démarrage. Mots de passe HASHÉS (bcrypt)
 # avant insertion en BDD — jamais stockés en clair.
@@ -59,14 +58,12 @@ def ensure_initialized() -> bool:
     """Crée la base, seed les scénarios AUC et les comptes par défaut si absents.
 
     Retourne True si une initialisation significative a été effectuée
-    (base nouvellement créée ou scénarios re-seedés), False sinon.
+    (scénarios re-seedés), False sinon.
     """
-    fresh = not Path(DB_PATH).exists()
-
     init_db()  # idempotent, crée toutes les tables si absentes
 
     with get_connection() as conn:
-        scen_count = conn.execute("SELECT COUNT(*) FROM scenarios_auc").fetchone()[0]
+        scen_count = conn.execute("SELECT COUNT(*) AS n FROM scenarios_auc").fetchone()["n"]
 
     if scen_count == 0:
         from seed_data import seed_scenarios
@@ -74,7 +71,7 @@ def ensure_initialized() -> bool:
 
     _seed_users()
 
-    return fresh or scen_count == 0
+    return scen_count == 0
 
 
 if __name__ == "__main__":

@@ -1,13 +1,18 @@
-venv/
-__pycache__/
-*.pyc
-*.pyo
-.env
-.DS_Store
-*.db
-*.db-journal
+# Secrets Streamlit — NE JAMAIS COMMITER
 .streamlit/secrets.toml
-*.xlsx
-*.csv
-*.html
-exports/
+
+# Base SQLite locale (legacy, plus utilisée avec Supabase)
+cdss_tmp.db
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db

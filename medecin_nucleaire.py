@@ -200,7 +200,9 @@ def _render_demande(d) -> None:
                 )
 
         try:
-            donnees = json.loads(d["donnees_patient"]) if d["donnees_patient"] else {}
+            raw = d["donnees_patient"]
+            # PostgreSQL JSONB renvoie déjà un dict ; SQLite renvoyait une string.
+            donnees = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
         except (json.JSONDecodeError, TypeError):
             donnees = {}
 
