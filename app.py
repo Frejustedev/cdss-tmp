@@ -22,13 +22,17 @@ CATEGORIES = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 
 def load_scenarios() -> pd.DataFrame:
+    # pd.read_sql_query ne fonctionne pas avec le shim de connexion PostgreSQL
+    # (pas d'API DBAPI complète) → on charge manuellement via fetchall.
+    cols = ["id", "categorie", "contexte_clinique", "variables_cles",
+            "score_auc", "classification", "source", "note_clinique"]
     with get_connection() as conn:
-        return pd.read_sql_query(
+        rows = conn.execute(
             "SELECT id, categorie, contexte_clinique, variables_cles, "
             "score_auc, classification, source, note_clinique "
-            "FROM scenarios_auc ORDER BY id",
-            conn,
-        )
+            "FROM scenarios_auc ORDER BY id"
+        ).fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=cols)
 
 
 def render_referentiel() -> None:

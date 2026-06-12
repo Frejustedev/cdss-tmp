@@ -757,6 +757,20 @@ def _build_excel_export(df: pd.DataFrame) -> bytes:
     drop_cols = ["fdr", "atcd", "reponses", "donnees_patient"]
     flat = flat.drop(columns=[c for c in drop_cols if c in flat.columns])
 
+    # Excel/openpyxl rejette les datetimes tz-aware. Les colonnes TIMESTAMPTZ
+    # (date_creation, timestamp_ouverture/decision) reviennent tz-aware de
+    # PostgreSQL → on retire le fuseau avant l'écriture.
+    for col in flat.columns:
+        s = flat[col]
+        if isinstance(s.dtype, pd.DatetimeTZDtype):
+            flat[col] = s.dt.tz_localize(None)
+        elif s.dtype == object:
+            flat[col] = s.map(
+                lambda v: v.replace(tzinfo=None)
+                if hasattr(v, "tzinfo") and getattr(v, "tzinfo", None) is not None
+                else v
+            )
+
     total = len(df)
     stats_rows = [{"Indicateur": "Total demandes", "Valeur": total}]
     for c in CLASSIFICATIONS:
