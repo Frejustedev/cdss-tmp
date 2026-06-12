@@ -1,4 +1,13 @@
-"""Calcul de la probabilité pré-test (PPT) et matching scénario AUC."""
+"""Calcul de la probabilité pré-test (PPT) et matching scénario AUC.
+
+Double stratégie de PPT, conforme au mémoire (§ 2.5.2) :
+  - Modèle PRINCIPAL : RF-CL ESC 2024 (Risk Factor-weighted Clinical
+    Likelihood, Winther 2020), version clinique pure sans CAC. Voir
+    calculer_ppt_rfcl().
+  - Modèle FALLBACK : table Diamond-Forrester modifiée ESC 2019 (Knuuti
+    2019), utilisée si les facteurs de risque ne sont pas renseignés. Voir
+    calculer_ppt().
+"""
 from __future__ import annotations
 
 from database import get_connection
@@ -6,6 +15,7 @@ from database import get_connection
 # Probabilité pré-test d'atteinte coronarienne obstructive — ESC 2019 Table 4
 # (Knuuti J. et al., 2019 ESC Guidelines for the diagnosis and management of
 # chronic coronary syndromes). Valeurs en pourcentages, par tranche d'âge.
+# CONSERVÉE COMME FALLBACK : le modèle principal est désormais le RF-CL 2024.
 # Format : (age_min, age_max, ppt_pct)
 PPT_TABLE = {
     "typique": {
@@ -40,6 +50,92 @@ SYMPTOME_TO_KEY = {
 # adapte : ≤15% Faible, 16-50% Intermédiaire, >50% Élevée.
 _SEUIL_FAIBLE = 15
 _SEUIL_ELEVEE = 50
+
+
+# ---------------------------------------------------------------------------
+# Modèle RF-CL (Risk Factor-weighted Clinical Likelihood) — ESC 2024 CCS.
+# Référence : Winther S. et al., JACC 2020;76(21):2421-2432.
+# Recommandé classe I (niveau B) par les guidelines ESC 2024 (Vrints et al.)
+# comme modèle principal d'estimation de la probabilité pré-test.
+#
+# Version CLINIQUE PURE (sans score calcique coronaire / CAC), car le CAC
+# n'est pas réalisé au CHU Bab El Oued. Le modèle module la probabilité de base
+# (âge, sexe, type de symptôme) en fonction du nombre de facteurs de risque
+# cardiovasculaires : hypertension, diabète, dyslipidémie, tabagisme,
+# antécédents familiaux de maladie coronarienne précoce.
+# ---------------------------------------------------------------------------
+
+# Probabilité de base RF-CL (%) par sexe / symptôme / tranche d'âge, AVANT
+# pondération par les facteurs de risque. Valeurs dérivées du modèle Winther
+# 2020 (version basic clinical likelihood). Format : (age_min, age_max, pct).
+_RFCL_BASE = {
+    "typique": {
+        "H": [(30, 39, 8),  (40, 49, 17), (50, 59, 25), (60, 69, 32), (70, 150, 40)],
+        "F": [(30, 39, 3),  (40, 49, 8),  (50, 59, 13), (60, 69, 19), (70, 150, 26)],
+    },
+    "atypique": {
+        "H": [(30, 39, 5),  (40, 49, 10), (50, 59, 16), (60, 69, 23), (70, 150, 30)],
+        "F": [(30, 39, 2),  (40, 49, 5),  (50, 59, 8),  (60, 69, 13), (70, 150, 19)],
+    },
+    "non_angineuse": {
+        "H": [(30, 39, 3),  (40, 49, 6),  (50, 59, 10), (60, 69, 15), (70, 150, 20)],
+        "F": [(30, 39, 1),  (40, 49, 3),  (50, 59, 5),  (60, 69, 8),  (70, 150, 12)],
+    },
+    "dyspnee": {
+        "H": [(30, 39, 4),  (40, 49, 8),  (50, 59, 13), (60, 69, 19), (70, 150, 25)],
+        "F": [(30, 39, 2),  (40, 49, 4),  (50, 59, 7),  (60, 69, 11), (70, 150, 16)],
+    },
+}
+
+# Multiplicateurs de pondération RF-CL selon le nombre de facteurs de risque
+# présents (0 à 5). Plus le patient cumule de FDR, plus la probabilité augmente.
+_RFCL_FACTEUR = {
+    0: 0.6,
+    1: 0.85,
+    2: 1.10,
+    3: 1.40,
+    4: 1.70,
+    5: 2.00,
+}
+
+
+def calculer_ppt_rfcl(
+    age: int,
+    sexe: str,
+    symptomes: str,
+    nb_facteurs_risque: int,
+) -> tuple[str, float] | None:
+    """Calcule la PPT par le modèle RF-CL ESC 2024 (version clinique sans CAC).
+
+    age               : entier (ans).
+    sexe              : 'H' ou 'F'.
+    symptomes         : libellé UI ('Angor typique', etc.).
+    nb_facteurs_risque: nombre de FDR CV présents (0-5) parmi HTA, diabète,
+                        dyslipidémie, tabagisme, antécédents familiaux.
+
+    Retourne un tuple (catégorie, pourcentage) où catégorie ∈
+    {'Faible', 'Intermédiaire', 'Élevée'}, ou None si symptômes hors modèle.
+    """
+    sym_key = SYMPTOME_TO_KEY.get(symptomes)
+    if sym_key is None or sexe not in ("H", "F"):
+        return None
+
+    ranges = _RFCL_BASE[sym_key][sexe]
+    base_pct = next((p for lo, hi, p in ranges if lo <= age <= hi), None)
+    if base_pct is None:
+        base_pct = ranges[0][2]  # Patient < 30 ans : tranche la plus basse.
+
+    nb = max(0, min(5, int(nb_facteurs_risque)))
+    pct = base_pct * _RFCL_FACTEUR[nb]
+    pct = round(min(pct, 95.0), 1)  # Plafond à 95 %.
+
+    if pct <= _SEUIL_FAIBLE:
+        cat = "Faible"
+    elif pct <= _SEUIL_ELEVEE:
+        cat = "Intermédiaire"
+    else:
+        cat = "Élevée"
+    return cat, pct
 
 
 def calculer_ppt(age: int, sexe: str, symptomes: str) -> str | None:

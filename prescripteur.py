@@ -9,7 +9,7 @@ import streamlit as st
 
 from auth import log_action
 from database import get_connection
-from scoring import calculer_ppt, match_scenario
+from scoring import calculer_ppt, calculer_ppt_rfcl, match_scenario
 
 SPECIALITES = [
     "Cardiologie", "Médecine interne", "Anesthésie-Réanimation",
@@ -56,6 +56,30 @@ SOUS_INDICATIONS_D = [
 
 CLASSIF_LABEL = {"A": "Appropriée", "MBA": "Peut être appropriée", "RA": "Rarement appropriée"}
 CLASSIF_COLOR = {"A": "#28a745", "MBA": "#ffc107", "RA": "#dc3545"}
+
+
+def _compter_fdr_rfcl(fdr_list) -> int:
+    """Compte les facteurs de risque du modèle RF-CL parmi la liste saisie.
+
+    Les 5 facteurs RF-CL (Winther 2020) : hypertension, diabète, dyslipidémie,
+    tabagisme actif, antécédents familiaux de CAD précoce. Le tabac sevré et
+    le diabète (type 1 ou 2) comptent chacun pour un facteur unique.
+    """
+    if not fdr_list:
+        return 0
+    fdr = set(fdr_list)
+    nb = 0
+    if "HTA" in fdr:
+        nb += 1
+    if "Diabète type 1" in fdr or "Diabète type 2" in fdr:
+        nb += 1
+    if "Dyslipidémie" in fdr:
+        nb += 1
+    if "Tabac actif" in fdr or "Tabac sevré" in fdr:
+        nb += 1
+    if "ATCD familial CAD précoce" in fdr:
+        nb += 1
+    return nb
 
 
 def render() -> None:
@@ -243,12 +267,23 @@ def _branche_a() -> None:
 
     ppt = None
     if symptome and symptome != "Syncope d'effort":
-        ppt = calculer_ppt(p["age"], p["sexe"], symptome)
-        if ppt:
+        nb_fdr = _compter_fdr_rfcl(p.get("fdr", []))
+        rfcl = calculer_ppt_rfcl(p["age"], p["sexe"], symptome, nb_fdr)
+        if rfcl:
+            ppt, pct = rfcl
             st.info(
-                f"PPT calculée (Diamond-Forrester modifié, ESC 2019) pour "
-                f"un patient {p['sexe']} de {p['age']} ans : **{ppt}**"
+                f"PPT calculée (modèle RF-CL ESC 2024, version clinique sans CAC) "
+                f"pour un patient {p['sexe']} de {p['age']} ans avec {nb_fdr} "
+                f"facteur(s) de risque : **{ppt}** (≈ {pct:.0f} %)"
             )
+        else:
+            # Fallback : table Diamond-Forrester modifiée ESC 2019.
+            ppt = calculer_ppt(p["age"], p["sexe"], symptome)
+            if ppt:
+                st.info(
+                    f"PPT calculée (Diamond-Forrester modifié ESC 2019, fallback) "
+                    f"pour un patient {p['sexe']} de {p['age']} ans : **{ppt}**"
+                )
 
     ecg = st.radio(
         "ECG de repos interprétable",
@@ -440,7 +475,8 @@ def _render_etape4() -> None:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id, categorie, contexte_clinique, variables_cles, "
-            "score_auc, classification, source, note_clinique "
+            "score_auc, classification, source, note_clinique, "
+            "classe_esc, reference_esc, conformite_esc, divergence_esc "
             "FROM scenarios_auc WHERE id = ?", (sid,)
         ).fetchone()
 
@@ -477,10 +513,59 @@ def _render_etape4() -> None:
     st.markdown(f"**Note clinique** : {row['note_clinique']}")
     st.divider()
 
+    # ----- Évaluation parallèle ESC (double évaluation AUC + ESC) -----
+    _render_bloc_esc(row)
+    st.divider()
+
     if classif == "RA":
         _render_alerte_alara(row)
     else:
         _render_protocole_suggere(row)
+
+
+# Correspondance classe ESC -> conformité / couleur
+_ESC_COLOR = {"Adhérent": "#28a745", "Non-adhérent": "#dc3545"}
+
+
+def _render_bloc_esc(row) -> None:
+    """Affiche l'évaluation parallèle selon les guidelines ESC."""
+    classe = row["classe_esc"] if "classe_esc" in row.keys() else None
+    conformite = row["conformite_esc"] if "conformite_esc" in row.keys() else None
+    reference = row["reference_esc"] if "reference_esc" in row.keys() else None
+    divergence = row["divergence_esc"] if "divergence_esc" in row.keys() else None
+
+    if not classe:
+        return
+
+    st.markdown("#### Évaluation parallèle — Guidelines ESC")
+    couleur = _ESC_COLOR.get(conformite, "#6c757d")
+
+    col_classe, col_conf = st.columns([1, 2])
+    with col_classe:
+        st.markdown(
+            "<div style='text-align:center; color:#555; font-size:14px;'>CLASSE ESC</div>"
+            f"<div style='text-align:center; font-size:56px; font-weight:bold; "
+            f"line-height:1.2; color:{couleur};'>{classe}</div>",
+            unsafe_allow_html=True,
+        )
+    with col_conf:
+        st.markdown(
+            f"<div style='background-color:{couleur}; color:white; padding:18px; "
+            f"text-align:center; border-radius:10px; font-size:20px; font-weight:bold;'>"
+            f"{conformite}</div>",
+            unsafe_allow_html=True,
+        )
+
+    if reference:
+        st.caption(f"Référence ESC : {reference}")
+
+    # Signaler une éventuelle divergence entre AUC et ESC
+    if divergence and divergence != "Non":
+        st.warning(
+            f"**Divergence AUC ↔ ESC** : {divergence}\n\n"
+            "Les deux référentiels ne concordent pas pour ce scénario. "
+            "Le jugement clinique du médecin nucléaire est déterminant."
+        )
 
 
 def _render_protocole_suggere(row) -> None:
@@ -615,7 +700,8 @@ def _persist_demande() -> None:
 
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT score_auc, classification FROM scenarios_auc WHERE id = ?", (sid,),
+            "SELECT score_auc, classification, classe_esc, conformite_esc "
+            "FROM scenarios_auc WHERE id = ?", (sid,),
         ).fetchone()
 
         donnees = {
@@ -630,8 +716,9 @@ def _persist_demande() -> None:
 
         conn.execute(
             "INSERT INTO demandes (id, date_creation, prescripteur, donnees_patient, "
-            "scenario_id, score_auc, classification, statut, justification_forcage) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "scenario_id, score_auc, classification, classe_esc, conformite_esc, "
+            "statut, justification_forcage) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 demande_id,
                 end_time.isoformat(timespec="seconds"),
@@ -640,6 +727,8 @@ def _persist_demande() -> None:
                 sid,
                 row["score_auc"],
                 row["classification"],
+                row["classe_esc"] if "classe_esc" in row.keys() else None,
+                row["conformite_esc"] if "conformite_esc" in row.keys() else None,
                 "En attente",
                 forcage,
             ),

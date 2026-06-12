@@ -19,15 +19,15 @@ from database import get_connection
 CLASSIFICATIONS = ["A", "MBA", "RA"]
 COLOR_CLASSIF = {"A": "#28a745", "MBA": "#ffc107", "RA": "#dc3545"}
 LABEL_CLASSIF = {"A": "Appropriate", "MBA": "May Be Appropriate", "RA": "Rarely Appropriate"}
-DOSE_PAR_TMP_MSV = 10  # mSv évitables (1 jour stress-repos 99mTc-Sestamibi)
+DOSE_PAR_TMP_MSV = 12.9  # mSv évitables (protocole 1 jour stress-repos 99mTc-Sestamibi, ICRP 128)
 FDR_OPTIONS = [
     "HTA", "Diabète type 1", "Diabète type 2", "Dyslipidémie",
     "Tabac actif", "Tabac sevré", "ATCD familial CAD précoce",
 ]
 PHASE_UI_TO_DB = {
     "Toutes": None,
-    "Phase 1 (rétrospectif)": "Phase 1",
-    "Phase 3 (prospectif)": "Phase 3",
+    "Audit (rétrospectif)": "Audit",
+    "Prospective (post-DES)": "Prospective",
 }
 
 
@@ -49,9 +49,10 @@ def render() -> None:
 
     tabs = st.tabs([
         "Vue d'ensemble",
-        "Phase 1 vs Phase 3",
+        "Audit vs Prospective",
         "Analyses détaillées",
         "Concordance & contournement",
+        "Concordance AUC ↔ ESC",
         "Exports",
         "🔍 Audit Log",
     ])
@@ -65,8 +66,10 @@ def render() -> None:
     with tabs[3]:
         _onglet_concordance(df)
     with tabs[4]:
-        _onglet_exports(df, df_all)
+        _onglet_concordance_esc(df)
     with tabs[5]:
+        _onglet_exports(df, df_all)
+    with tabs[6]:
         _onglet_audit_log()
 
 
@@ -116,7 +119,7 @@ def _render_gestion_phases() -> None:
         )
         new_phase = st.radio(
             "Phase à assigner",
-            ["Phase 1", "Phase 3"],
+            ["Audit", "Prospective"],
             horizontal=True,
             key="ch_new_phase",
         )
@@ -174,7 +177,10 @@ def _load_demandes(phase="Toutes", date_debut=None, date_fin=None) -> pd.DataFra
 
     where_sql = " AND ".join(where) if where else "1=1"
     sql = f"""
-        SELECT d.*, s.categorie AS scenario_categorie, s.source AS scenario_source
+        SELECT d.*, s.categorie AS scenario_categorie, s.source AS scenario_source,
+               s.classe_esc AS scenario_classe_esc,
+               s.conformite_esc AS scenario_conformite_esc,
+               s.divergence_esc AS scenario_divergence_esc
         FROM demandes d
         LEFT JOIN scenarios_auc s ON d.scenario_id = s.id
         WHERE {where_sql}
@@ -196,6 +202,13 @@ def _load_demandes(phase="Toutes", date_debut=None, date_fin=None) -> pd.DataFra
     df["reponses"] = parsed.apply(lambda d: d.get("reponses") or {})
     df["duree_saisie"] = parsed.apply(lambda d: d.get("duree_saisie_secondes"))
     df["classification_effective"] = df["classification_medecin"].fillna(df["classification"])
+    # Conformité ESC effective : celle de la demande, sinon celle du scénario.
+    if "conformite_esc" in df.columns:
+        df["conformite_esc_eff"] = df["conformite_esc"].fillna(
+            df.get("scenario_conformite_esc")
+        )
+    else:
+        df["conformite_esc_eff"] = df.get("scenario_conformite_esc")
     return df
 
 
@@ -209,8 +222,8 @@ def _onglet_vue_ensemble(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
     counts = {c: int((df["classification_effective"] == c).sum()) for c in CLASSIFICATIONS}
     pct = {c: counts[c] / total * 100 if total else 0 for c in CLASSIFICATIONS}
 
-    df_p1 = df_all[df_all["phase_etude"] == "Phase 1"] if not df_all.empty else df_all
-    df_p3 = df_all[df_all["phase_etude"] == "Phase 3"] if not df_all.empty else df_all
+    df_p1 = df_all[df_all["phase_etude"] == "Audit"] if not df_all.empty else df_all
+    df_p3 = df_all[df_all["phase_etude"] == "Prospective"] if not df_all.empty else df_all
     delta_pct = {c: None for c in CLASSIFICATIONS}
     if len(df_p1) > 0 and len(df_p3) > 0:
         for c in CLASSIFICATIONS:
@@ -223,13 +236,13 @@ def _onglet_vue_ensemble(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
     with cols[0]:
         st.metric("Demandes totales", total)
     with cols[1]:
-        d = f"{delta_pct['A']:+.1f}% vs P1" if delta_pct["A"] is not None else None
+        d = f"{delta_pct['A']:+.1f}% vs Audit" if delta_pct["A"] is not None else None
         st.metric("🟢 Appropriate", f"{counts['A']} ({pct['A']:.0f}%)", delta=d)
     with cols[2]:
-        d = f"{delta_pct['MBA']:+.1f}% vs P1" if delta_pct["MBA"] is not None else None
+        d = f"{delta_pct['MBA']:+.1f}% vs Audit" if delta_pct["MBA"] is not None else None
         st.metric("🟡 May Be Appropriate", f"{counts['MBA']} ({pct['MBA']:.0f}%)", delta=d)
     with cols[3]:
-        d = f"{delta_pct['RA']:+.1f}% vs P1" if delta_pct["RA"] is not None else None
+        d = f"{delta_pct['RA']:+.1f}% vs Audit" if delta_pct["RA"] is not None else None
         st.metric(
             "🔴 Rarely Appropriate ⚠️",
             f"{counts['RA']} ({pct['RA']:.0f}%)",
@@ -268,7 +281,7 @@ def _onglet_vue_ensemble(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
         st.metric(
             "Dose efficace cumulée évitée",
             f"{dose_evitee} mSv",
-            help="(RA rejetées par le médecin) × 10 mSv (1 jour stress-repos 99mTc).",
+            help="(RA rejetées par le médecin) × 12,9 mSv (1 jour stress-repos 99mTc, ICRP 128).",
         )
     with cols[3]:
         st.metric("Demandes en attente", nb_attente)
@@ -299,7 +312,7 @@ def _onglet_vue_ensemble(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ===== ONGLET 2 — Phase 1 vs Phase 3 =====
+# ===== ONGLET 2 — Audit vs Prospective =====
 def _wald_diff_proportions(x1, n1, x2, n2):
     """Différence p1-p2 + IC 95% Wald avec correction de continuité."""
     p1, p2 = x1 / n1, x2 / n2
@@ -324,15 +337,15 @@ def _onglet_comparaison(df_all: pd.DataFrame) -> None:
         st.info("Aucune demande dans la période sélectionnée.")
         return
 
-    df_p1 = df_all[df_all["phase_etude"] == "Phase 1"]
-    df_p3 = df_all[df_all["phase_etude"] == "Phase 3"]
+    df_p1 = df_all[df_all["phase_etude"] == "Audit"]
+    df_p3 = df_all[df_all["phase_etude"] == "Prospective"]
     n1, n3 = len(df_p1), len(df_p3)
 
     if n1 == 0 or n3 == 0:
         st.info(
             f"Données insuffisantes pour comparaison "
-            f"(Phase 1 : {n1} demandes, Phase 3 : {n3}). "
-            "Marque au moins quelques demandes comme Phase 1 via le panneau "
+            f"(Audit : {n1} demandes, Prospective : {n3}). "
+            "Marque au moins quelques demandes comme Audit via le panneau "
             "« Gérer les phases » en haut pour activer cette analyse."
         )
         return
@@ -345,9 +358,9 @@ def _onglet_comparaison(df_all: pd.DataFrame) -> None:
         p_value, test_name = _test_proportions(x1, n1, x3, n3)
         rows.append({
             "Indicateur": f"Taux {c}",
-            "Phase 1": f"{x1/n1*100:.1f}% ({x1}/{n1})",
-            "Phase 3": f"{x3/n3*100:.1f}% ({x3}/{n3})",
-            "Différence (P3-P1)": f"{diff*100:+.1f}%",
+            "Audit": f"{x1/n1*100:.1f}% ({x1}/{n1})",
+            "Prospective": f"{x3/n3*100:.1f}% ({x3}/{n3})",
+            "Différence (Prospective − Audit)": f"{diff*100:+.1f}%",
             "IC 95%": f"[{lo*100:.1f}, {hi*100:.1f}]",
             "p-value": f"p={p_value:.3f} ({test_name})",
         })
@@ -366,9 +379,9 @@ def _onglet_comparaison(df_all: pd.DataFrame) -> None:
             test_t_name = "Mann-Whitney"
         rows.append({
             "Indicateur": "Temps validation moyen",
-            "Phase 1": f"{t1.mean():.0f} s (n={len(t1)})",
-            "Phase 3": f"{t3.mean():.0f} s (n={len(t3)})",
-            "Différence (P3-P1)": f"{t3.mean() - t1.mean():+.0f} s",
+            "Audit": f"{t1.mean():.0f} s (n={len(t1)})",
+            "Prospective": f"{t3.mean():.0f} s (n={len(t3)})",
+            "Différence (Prospective − Audit)": f"{t3.mean() - t1.mean():+.0f} s",
             "IC 95%": "—",
             "p-value": f"p={p_t:.3f} ({test_t_name})",
         })
@@ -394,16 +407,16 @@ def _onglet_comparaison(df_all: pd.DataFrame) -> None:
         f"<div style='background-color:{color}; color:white; padding:18px; border-radius:8px;'>"
         f"<strong>{verdict}</strong><br/>"
         f"La proportion de Rarely Appropriate est passée de "
-        f"{ra_p1/n1*100:.1f}% (Phase 1) à {ra_p3/n3*100:.1f}% (Phase 3), "
+        f"{ra_p1/n1*100:.1f}% (Audit) à {ra_p3/n3*100:.1f}% (Prospective), "
         f"différence {diff*100:+.1f}% (IC 95% [{lo*100:.1f}, {hi*100:.1f}], p={p_value:.3f})."
         f"</div>",
         unsafe_allow_html=True,
     )
 
     st.divider()
-    st.subheader("Distribution par classification : Phase 1 vs Phase 3")
+    st.subheader("Distribution par classification : Audit vs Prospective")
     bars = []
-    for ph, df_ph in (("Phase 1", df_p1), ("Phase 3", df_p3)):
+    for ph, df_ph in (("Audit", df_p1), ("Prospective", df_p3)):
         for c in CLASSIFICATIONS:
             bars.append({
                 "Phase": ph,
@@ -413,19 +426,19 @@ def _onglet_comparaison(df_all: pd.DataFrame) -> None:
     fig = px.bar(
         pd.DataFrame(bars), x="Classification", y="Effectif", color="Phase",
         barmode="group",
-        color_discrete_map={"Phase 1": "#6c757d", "Phase 3": "#0d6efd"},
+        color_discrete_map={"Audit": "#6c757d", "Prospective": "#0d6efd"},
     )
     st.plotly_chart(fig, use_container_width=True)
 
     if len(t1) > 0 and len(t3) > 0:
-        st.subheader("Temps de validation : Phase 1 vs Phase 3")
+        st.subheader("Temps de validation : Audit vs Prospective")
         box_df = pd.concat([
-            pd.DataFrame({"Phase": "Phase 1", "Durée (s)": t1}),
-            pd.DataFrame({"Phase": "Phase 3", "Durée (s)": t3}),
+            pd.DataFrame({"Phase": "Audit", "Durée (s)": t1}),
+            pd.DataFrame({"Phase": "Prospective", "Durée (s)": t3}),
         ])
         fig2 = px.box(
             box_df, x="Phase", y="Durée (s)", color="Phase",
-            color_discrete_map={"Phase 1": "#6c757d", "Phase 3": "#0d6efd"},
+            color_discrete_map={"Audit": "#6c757d", "Prospective": "#0d6efd"},
         )
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -528,6 +541,109 @@ def _onglet_analyses(df: pd.DataFrame) -> None:
         fig.add_vline(x=6.5, line_dash="dash", line_color="green",
                       annotation_text="MBA / A")
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ===== ONGLET — Concordance AUC ↔ ESC (hypothèse H2) =====
+def _onglet_concordance_esc(df: pd.DataFrame) -> None:
+    if df.empty:
+        st.info("Aucune demande à analyser.")
+        return
+
+    st.subheader("Concordance entre les référentiels AUC et ESC (hypothèse H2)")
+    st.caption(
+        "Cet onglet mesure l'accord entre la classification AUC (binarisée "
+        "Appropriée / Non-appropriée) et la conformité ESC (Adhérent / Non-adhérent), "
+        "conformément à l'approche de Liga & Gimelli (2024)."
+    )
+
+    if "conformite_esc_eff" not in df.columns:
+        st.info("Aucune donnée ESC disponible.")
+        return
+
+    sub = df[df["conformite_esc_eff"].notna() & df["classification_effective"].notna()].copy()
+    if len(sub) < 2:
+        st.info(
+            f"Pas assez de demandes évaluées sur les deux référentiels "
+            f"({len(sub)} demande(s)). Saisis quelques demandes via le module "
+            "Prescripteur pour activer cette analyse."
+        )
+        return
+
+    # Binarisation AUC : A => "Appropriée" ; MBA et RA => "Non-appropriée".
+    # (MBA est rapproché de Non-appropriée pour un parallèle binaire avec l'ESC.)
+    def auc_binaire(c):
+        return "Appropriée" if c == "A" else "Non-appropriée"
+
+    def esc_binaire(c):
+        return "Appropriée" if c == "Adhérent" else "Non-appropriée"
+
+    sub["auc_bin"] = sub["classification_effective"].apply(auc_binaire)
+    sub["esc_bin"] = sub["conformite_esc_eff"].apply(esc_binaire)
+
+    labels_bin = ["Appropriée", "Non-appropriée"]
+    cm = confusion_matrix(sub["auc_bin"], sub["esc_bin"], labels=labels_bin)
+    cm_df = pd.DataFrame(
+        cm,
+        index=[f"AUC {l}" for l in labels_bin],
+        columns=[f"ESC {l}" for l in labels_bin],
+    )
+    st.markdown("**Matrice de concordance AUC × ESC**")
+    st.dataframe(cm_df, use_container_width=True)
+
+    # Taux de concordance brut + kappa de Cohen.
+    concordants = int((sub["auc_bin"] == sub["esc_bin"]).sum())
+    taux = concordants / len(sub) * 100
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Taux de concordance brut", f"{taux:.1f} %",
+                  delta=f"{concordants}/{len(sub)} demandes")
+    with col2:
+        homogene = sub["auc_bin"].nunique() < 2 or sub["esc_bin"].nunique() < 2
+        try:
+            kappa = cohen_kappa_score(sub["auc_bin"], sub["esc_bin"], labels=labels_bin)
+        except (ValueError, TypeError):
+            kappa = float("nan")
+        # cohen_kappa_score renvoie NaN (sans lever) quand une seule classe est
+        # présente (cas fréquent en début d'étude) : 0/0. On le traite à part
+        # pour ne pas afficher un faux « accord excellent ».
+        if homogene or kappa is None or np.isnan(kappa):
+            st.metric("Kappa de Cohen (AUC ↔ ESC)", "N/A",
+                      delta="Variabilité insuffisante", delta_color="off")
+        else:
+            if kappa < 0.20:
+                interp = "léger"
+            elif kappa < 0.40:
+                interp = "faible"
+            elif kappa < 0.60:
+                interp = "modéré"
+            elif kappa < 0.80:
+                interp = "substantiel"
+            else:
+                interp = "excellent"
+            st.metric("Kappa de Cohen (AUC ↔ ESC)", f"{kappa:.3f}",
+                      delta=f"Accord {interp}")
+
+    st.caption(
+        "Interprétation selon Landis & Koch (1977). L'hypothèse H2 du mémoire "
+        "attend un kappa > 0,60 (accord substantiel)."
+    )
+
+    st.divider()
+    st.subheader("Demandes divergentes (AUC ≠ ESC)")
+    divergentes = sub[sub["auc_bin"] != sub["esc_bin"]]
+    if divergentes.empty:
+        st.success("Aucune demande divergente : AUC et ESC concordent sur tous les cas évalués.")
+    else:
+        cols_aff = ["id", "scenario_id", "classification_effective",
+                    "conformite_esc_eff", "scenario_divergence_esc"]
+        cols_aff = [c for c in cols_aff if c in divergentes.columns]
+        aff = divergentes[cols_aff].rename(columns={
+            "classification_effective": "Classif. AUC",
+            "conformite_esc_eff": "Conformité ESC",
+            "scenario_divergence_esc": "Type de divergence",
+        })
+        st.dataframe(aff, use_container_width=True, hide_index=True)
 
 
 # ===== ONGLET 4 — Concordance & contournement =====
@@ -644,14 +760,14 @@ def _build_excel_export(df: pd.DataFrame) -> bytes:
     })
 
     comp_rows = []
-    df_p1 = df[df["phase_etude"] == "Phase 1"]
-    df_p3 = df[df["phase_etude"] == "Phase 3"]
+    df_p1 = df[df["phase_etude"] == "Audit"]
+    df_p3 = df[df["phase_etude"] == "Prospective"]
     if not df_p1.empty and not df_p3.empty:
         for c in CLASSIFICATIONS:
             comp_rows.append({
                 "Classification": c,
-                "Phase 1": f"{(df_p1['classification_effective']==c).mean()*100:.1f}%",
-                "Phase 3": f"{(df_p3['classification_effective']==c).mean()*100:.1f}%",
+                "Audit": f"{(df_p1['classification_effective']==c).mean()*100:.1f}%",
+                "Prospective": f"{(df_p3['classification_effective']==c).mean()*100:.1f}%",
             })
 
     forc = df[df["justification_forcage"].notna()][
@@ -662,10 +778,10 @@ def _build_excel_export(df: pd.DataFrame) -> bytes:
         flat.to_excel(writer, sheet_name="Demandes", index=False)
         pd.DataFrame(stats_rows).to_excel(writer, sheet_name="Statistiques", index=False)
         if comp_rows:
-            pd.DataFrame(comp_rows).to_excel(writer, sheet_name="Phase1_vs_Phase3", index=False)
+            pd.DataFrame(comp_rows).to_excel(writer, sheet_name="Audit_vs_Prospective", index=False)
         else:
-            pd.DataFrame([{"Note": "Phase 1 ou Phase 3 sans données"}]).to_excel(
-                writer, sheet_name="Phase1_vs_Phase3", index=False)
+            pd.DataFrame([{"Note": "Audit ou Prospective sans données"}]).to_excel(
+                writer, sheet_name="Audit_vs_Prospective", index=False)
         if not forc.empty:
             forc.to_excel(writer, sheet_name="Forcages", index=False)
         else:
@@ -729,20 +845,20 @@ th {{ background: #e9ecef; }}
 <div class="kpis">
   <div class="kpi"><div class="v">{duree_str}</div><div class="l">Temps moyen validation</div></div>
   <div class="kpi"><div class="v">{nb_ra_force}/{nb_ra}</div><div class="l">RA forcées (contournement)</div></div>
-  <div class="kpi"><div class="v">{dose} mSv</div><div class="l">Dose évitée (RA rejetées × 10)</div></div>
+  <div class="kpi"><div class="v">{dose} mSv</div><div class="l">Dose évitée (RA rejetées × 12,9)</div></div>
   <div class="kpi"><div class="v">{en_attente}</div><div class="l">En attente</div></div>
 </div>
 """]
 
-    df_p1 = df[df["phase_etude"] == "Phase 1"]
-    df_p3 = df[df["phase_etude"] == "Phase 3"]
-    parts.append("<h2>Comparaison Phase 1 vs Phase 3</h2>")
+    df_p1 = df[df["phase_etude"] == "Audit"]
+    df_p3 = df[df["phase_etude"] == "Prospective"]
+    parts.append("<h2>Comparaison Audit vs Prospective</h2>")
     if df_p1.empty or df_p3.empty:
         parts.append(
-            f"<p>Données insuffisantes (Phase 1 : {len(df_p1)}, Phase 3 : {len(df_p3)}).</p>"
+            f"<p>Données insuffisantes (Audit : {len(df_p1)}, Prospective : {len(df_p3)}).</p>"
         )
     else:
-        parts.append("<table><tr><th>Classification</th><th>Phase 1</th><th>Phase 3</th></tr>")
+        parts.append("<table><tr><th>Classification</th><th>Audit</th><th>Prospective</th></tr>")
         for c in CLASSIFICATIONS:
             p1 = (df_p1["classification_effective"] == c).mean() * 100
             p3 = (df_p3["classification_effective"] == c).mean() * 100
@@ -766,7 +882,7 @@ def _onglet_exports(df: pd.DataFrame, df_all: pd.DataFrame) -> None:
     st.markdown("### 📥 1. Export Excel complet (multi-feuilles)")
     st.caption(
         "Feuilles : Demandes (données brutes + JSON déplié) · Statistiques · "
-        "Phase1_vs_Phase3 · Forcages"
+        "Audit_vs_Prospective · Forcages"
     )
     src = df_all if not df_all.empty else df
     excel_bytes = _build_excel_export(src)

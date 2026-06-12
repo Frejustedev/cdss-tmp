@@ -16,10 +16,22 @@ en médecine nucléaire.
 
 ## Référentiels utilisés
 
-- **AUC 2023** — Winchester DE et al. *JACC* 2023 — Multimodality Appropriate Use
-  Criteria for the detection and risk assessment of stable ischemic heart disease.
-- **AUC 2009 SPECT-MPI** — Hendel RC et al. *JACC* 2009 — Appropriate Use Criteria
-  for Cardiac Radionuclide Imaging.
+Le CDSS repose sur une **double évaluation parallèle** (versant AUC + versant ESC) :
+
+- **AUC 2009 SPECT-MPI** — Hendel RC et al. *JACC* 2009;53(23):2201-2229 —
+  Appropriate Use Criteria for Cardiac Radionuclide Imaging (référentiel AUC
+  principal, dédié au 99mTc — 42 scénarios).
+- **AUC 2024 préopératoire** — Doherty JU et al. *JACC* 2024;84(15):1455-1491 —
+  Appropriate Use Criteria for Multimodality Imaging in Noncardiac Surgery
+  (catégorie C — 8 scénarios).
+- **ESC 2024 CCS** — Vrints C et al. *Eur Heart J* 2024;45(36):3415-3537 —
+  Guidelines for the management of chronic coronary syndromes (conformité ESC,
+  catégories A, B, D-H).
+- **ESC 2022 NCS** — Halvorsen S et al. *Eur Heart J* 2022;43(39):3826-3924 —
+  Cardiovascular assessment for non-cardiac surgery (conformité ESC, catégorie C).
+- **RF-CL** — Winther S et al. *JACC* 2020;76(21):2421-2432 — modèle de
+  probabilité pré-test recommandé classe I par l'ESC 2024 (version clinique sans
+  CAC).
 
 ## Stack technique
 

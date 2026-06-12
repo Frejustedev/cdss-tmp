@@ -112,46 +112,64 @@ def _onglet_guide() -> None:
 
 # ===== ONGLET 2 — Référentiels & Méthodologie =====
 def _onglet_referentiels() -> None:
-    st.subheader("A. Référentiels utilisés")
+    st.subheader("A. Référentiels utilisés (double évaluation AUC + ESC)")
     refs = pd.DataFrame([
-        {
-            "Référentiel": "AUC Multimodalité Chronic Coronary Disease",
-            "Année": "2023",
-            "Auteurs": "Winchester DE et al.",
-            "Journal": "JACC 2023",
-            "Utilisation": "Référentiel principal actualisé",
-        },
         {
             "Référentiel": "AUC SPECT-MPI dédiée",
             "Année": "2009",
             "Auteurs": "Hendel RC et al.",
-            "Journal": "JACC 2009;53(25):2201-2229",
-            "Utilisation": "Granularité spécifique TMP",
+            "Journal": "JACC 2009;53(23):2201-2229",
+            "Utilisation": "Référentiel AUC principal (42 scénarios)",
         },
         {
-            "Référentiel": "AUC Multimodalité Stable Ischemic HD",
-            "Année": "2013",
-            "Auteurs": "Wolk MJ et al.",
-            "Journal": "JACC 2014;63(4):380-406",
-            "Utilisation": "Référentiel intermédiaire",
+            "Référentiel": "AUC préopératoire chirurgie non cardiaque",
+            "Année": "2024",
+            "Auteurs": "Doherty JU et al.",
+            "Journal": "JACC 2024;84(15):1455-1491",
+            "Utilisation": "AUC catégorie C préopératoire (8 scénarios)",
+        },
+        {
+            "Référentiel": "ESC Syndromes Coronariens Chroniques",
+            "Année": "2024",
+            "Auteurs": "Vrints C et al.",
+            "Journal": "Eur Heart J 2024;45(36):3415-3537",
+            "Utilisation": "Conformité ESC (catégories A, B, D-H)",
+        },
+        {
+            "Référentiel": "ESC Chirurgie non cardiaque",
+            "Année": "2022",
+            "Auteurs": "Halvorsen S et al.",
+            "Journal": "Eur Heart J 2022;43(39):3826-3924",
+            "Utilisation": "Conformité ESC préopératoire (catégorie C)",
+        },
+        {
+            "Référentiel": "Modèle RF-CL (probabilité pré-test)",
+            "Année": "2020",
+            "Auteurs": "Winther S et al.",
+            "Journal": "JACC 2020;76(21):2421-2432",
+            "Utilisation": "PPT principale (classe I ESC 2024, sans CAC)",
         },
     ])
     st.table(refs)
 
     st.divider()
-    st.subheader("B. Justification du choix méthodologique")
+    st.subheader("B. Justification du choix méthodologique : double évaluation")
     st.markdown(
         """
-Le choix d'un référentiel américain (ACCF/ASNC) plutôt qu'européen (ESC) ou
-français est **méthodologique, non géographique**. Les recommandations ESC sont
-structurées en classes (I, IIa, IIb, III) et niveaux de preuve (A, B, C) :
-elles guident la décision clinique mais ne fournissent pas d'outil de scoring
-de l'appropriateness des prescriptions. À l'inverse, les AUC ACCF/ASNC sont
-le seul référentiel international proposant une **cotation 1-9 par scénario
-clinique** spécifiquement conçue pour évaluer la conformité des prescriptions
-d'imagerie — ce qui est précisément l'objet de cette étude. C'est aussi le
-référentiel utilisé par les études fondatrices du domaine (Doukky 2013,
-FOCUS, Gibbons), garantissant la comparabilité des résultats.
+Ce travail repose sur une **double évaluation parallèle**, inspirée de l'approche
+de Liga & Gimelli (2024) :
+
+- **Versant AUC (ACCF/ASNC)** : seul référentiel international proposant une
+  **cotation 1-9 par scénario clinique**, conçue pour évaluer la conformité des
+  prescriptions d'imagerie. C'est le référentiel des études fondatrices (Doukky
+  2013, FOCUS, Gibbons), garantissant la **comparabilité internationale**.
+- **Versant ESC** : les recommandations européennes (classes I, IIa, IIb, III)
+  constituent la référence des **cardiologues prescripteurs** locaux. Évaluer la
+  conformité ESC ancre l'audit dans leur pratique réelle.
+
+L'AUC 2009 est retenue plutôt que l'AUC 2023 multimodale car elle est
+**spécifiquement dédiée à l'imagerie radio-isotopique au 99mTc** et ne dépend
+pas de modalités absentes au CHU Bab El Oued (CAC, coro-TDM, IRM).
 """
     )
 
@@ -159,11 +177,17 @@ FOCUS, Gibbons), garantissant la comparabilité des résultats.
     st.subheader("C. Calcul de la probabilité pré-test (PPT)")
     st.markdown(
         """
-La PPT est calculée selon la table de **Diamond-Forrester modifiée
-recommandée par l'ESC 2019**, avec stratification opérationnelle en trois
-catégories : **≤ 15 % (Faible)**, **16-50 % (Intermédiaire)**, **> 50 %
-(Élevée)**. Ces seuils sont adaptés à la déflation des PPT observée dans
-cette version par rapport à la table originale Diamond-Forrester 1979.
+La PPT est calculée selon le **modèle RF-CL ESC 2024** (Risk Factor-weighted
+Clinical Likelihood, Winther 2020), recommandé en **classe I (niveau B)** par
+les guidelines ESC 2024. Il s'agit de la **version clinique pure sans score
+calcique** (le CAC n'étant pas disponible au CHU Bab El Oued) : la probabilité
+est pondérée par l'âge, le sexe, le type de symptôme et le nombre de facteurs
+de risque (HTA, diabète, dyslipidémie, tabac, antécédents familiaux).
+
+En l'absence d'informations suffisantes, le système bascule sur la table
+**Diamond-Forrester modifiée ESC 2019** (fallback). Stratification opérationnelle
+en trois catégories : **≤ 15 % (Faible)**, **16-50 % (Intermédiaire)**,
+**> 50 % (Élevée)**.
 """
     )
 
@@ -171,17 +195,28 @@ cette version par rapport à la table originale Diamond-Forrester 1979.
     st.subheader("D. Bibliographie principale")
     st.markdown(
         """
-1. **Winchester DE et al.** ACC/AHA/ASE/ASNC/ASPC/HFSA/HRS/SCAI/SCCT/SCMR/STS
-   2023 Multimodality Appropriate Use Criteria for the Detection and Risk
-   Assessment of Chronic Coronary Disease. *JACC* 2023.
-2. **Hendel RC et al.** ACCF/ASNC/ACR/AHA/ASE/SCCT/SCMR/SNM 2009 Appropriate
+1. **Hendel RC et al.** ACCF/ASNC/ACR/AHA/ASE/SCCT/SCMR/SNM 2009 Appropriate
    Use Criteria for Cardiac Radionuclide Imaging. *J Am Coll Cardiol.*
-   2009;53(25):2201-2229.
-3. **Doukky R et al.** Impact of Appropriate Use on the Prognostic Value of
+   2009;53(23):2201-2229.
+2. **Doherty JU et al.** ACC/AHA/ASNC/HRS/SCAI/SCCT/SCMR/STS 2024 Appropriate
+   Use Criteria for Multimodality Imaging in Cardiovascular Evaluation of
+   Patients Undergoing Noncardiac Surgery. *J Am Coll Cardiol.*
+   2024;84(15):1455-1491.
+3. **Vrints C et al.** 2024 ESC Guidelines for the management of chronic
+   coronary syndromes. *Eur Heart J.* 2024;45(36):3415-3537.
+4. **Halvorsen S et al.** 2022 ESC Guidelines on cardiovascular assessment and
+   management of patients undergoing non-cardiac surgery. *Eur Heart J.*
+   2022;43(39):3826-3924.
+5. **Winther S et al.** Incorporating Coronary Calcification Into Pre-Test
+   Assessment of the Likelihood of Coronary Artery Disease. *J Am Coll Cardiol.*
+   2020;76(21):2421-2432.
+6. **Liga R, Gimelli A.** Impact of appropriateness in clinical practice. *Eur
+   Heart J Imaging Methods Pract.* 2024;2(1):qyad036.
+7. **Doukky R et al.** Impact of Appropriate Use on the Prognostic Value of
    SPECT MPI. *Circulation* 2013;128(15):1634-1643.
-4. **Duvall WL et al.** FOCUS: Formation of Optimal Cardiovascular Utilization
+8. **Duvall WL et al.** FOCUS: Formation of Optimal Cardiovascular Utilization
    Strategies. *JACC Cardiovasc Imaging* 2013;6(3):297-309.
-5. **ICRP Publication 128.** Radiation Dose to Patients from
+9. **ICRP Publication 128.** Radiation Dose to Patients from
    Radiopharmaceuticals. *Ann ICRP* 2015;44(2S).
 """
     )
@@ -196,9 +231,9 @@ Ce CDSS est développé dans le cadre du mémoire de fin d'études spécialisée
 en Médecine Nucléaire de **Dr. Babatoundé Fréjuste Pinocio AGBOTON**,
 intitulé :
 
-> *« Évaluation de l'impact d'un Système Informatisé d'Aide à la
-> Prescription sur la conformité des demandes de tomoscintigraphie
-> myocardique de perfusion aux critères d'utilisation appropriée. »*
+> *« Audit de la conformité des prescriptions de tomoscintigraphie
+> myocardique de perfusion aux critères d'utilisation appropriée et
+> conception d'un système informatisé d'aide à la prescription (CDSS). »*
 """
     )
 
@@ -225,31 +260,28 @@ intitulé :
     st.markdown(
         """
 **Objectif principal**
-- Évaluer l'impact du CDSS sur le taux de conformité des demandes de TMP aux
-  AUC ACCF/ASNC.
+- Auditer la conformité des prescriptions de TMP selon une **double évaluation
+  AUC ACCF/ASNC + ESC**, et concevoir un CDSS d'aide à la prescription.
 
 **Objectifs secondaires**
-- Audit clinique des prescriptions actuelles (Phase 1).
-- Estimation de la dose efficace évitée (radioprotection).
-- Comparaison du temps de validation médicale avant/après.
-- Évaluation de l'acceptabilité par les prescripteurs.
+- Audit clinique rétrospectif des prescriptions actuelles.
+- Mesure de la concordance entre les référentiels AUC et ESC (kappa de Cohen).
+- Estimation de la dose efficace évitable (radioprotection).
+- Validation technique du CDSS (concordance avec l'évaluation humaine experte).
 """
     )
 
     st.divider()
-    st.subheader("D. Phases de l'étude")
+    st.subheader("D. Structure de l'étude")
     phases = pd.DataFrame([
-        {"Phase": "Phase 1",
-         "Description": "Audit rétrospectif — double évaluation en aveugle",
-         "Durée": "2-3 mois",
+        {"Volet": "Volet 1 — Audit",
+         "Description": "Audit rétrospectif — double évaluation AUC + ESC en aveugle",
          "Statut": "En cours"},
-        {"Phase": "Phase 2",
-         "Description": "Développement du CDSS",
-         "Durée": "2-3 mois",
-         "Statut": "✅ Terminé"},
-        {"Phase": "Phase 3",
-         "Description": "Étude prospective post-déploiement",
-         "Durée": "3 mois",
+        {"Volet": "Volet 2 — CDSS",
+         "Description": "Conception, développement et validation technique du CDSS",
+         "Statut": "✅ Réalisé"},
+        {"Volet": "Perspective",
+         "Description": "Étude prospective post-déploiement (perspective post-DES)",
          "Statut": "À venir"},
     ])
     st.table(phases)
@@ -272,7 +304,8 @@ def _onglet_faq() -> None:
         (
             "Que faire si je suis en désaccord avec le score AUC calculé ?",
             """Le score AUC est calculé automatiquement selon les critères
-ACCF/ASNC 2023. Si vous estimez que la classification ne reflète pas la réalité
+ACCF/ASNC (AUC 2009 pour la SPECT-MPI, AUC 2024 pour le préopératoire). Si vous
+estimez que la classification ne reflète pas la réalité
 clinique du patient, deux options existent :
 
 1. **Côté Prescripteur** : utiliser le bouton « Forcer malgré l'alerte » avec
@@ -284,9 +317,11 @@ Tous les forçages et reclassements sont tracés pour analyse statistique.""",
         ),
         (
             "Comment est calculée la probabilité pré-test (PPT) ?",
-            """La PPT est calculée automatiquement selon la table
-Diamond-Forrester modifiée ESC 2019, basée sur l'âge, le sexe et le type de
-symptômes (typique, atypique, douleur non angineuse, dyspnée). Les seuils
+            """La PPT est calculée automatiquement selon le **modèle RF-CL ESC
+2024** (Risk Factor-weighted Clinical Likelihood), version clinique sans score
+calcique, basée sur l'âge, le sexe, le type de symptômes et le nombre de
+facteurs de risque cardiovasculaires. En cas d'informations manquantes, le
+système bascule sur la table Diamond-Forrester modifiée ESC 2019. Les seuils
 opérationnels sont : **≤ 15 % (Faible)**, **16-50 % (Intermédiaire)**,
 **> 50 % (Élevée)**.""",
         ),

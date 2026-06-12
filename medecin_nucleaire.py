@@ -25,6 +25,14 @@ TRIS = [
 ACTIVITES_TMC = "Stress 350 MBq / Repos 1100 MBq (poids-dépendant)"
 
 
+def _safe_get(row, key, default=None):
+    """Accès sûr à une colonne d'un sqlite3.Row (retourne default si absente)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 def render() -> None:
     """Point d'entrée du module Médecin Nucléaire."""
     st.header("Module Médecin Nucléaire — Tri des demandes")
@@ -58,11 +66,22 @@ def _render_metrics() -> None:
             "SELECT COALESCE(classification_medecin, classification) AS cl, COUNT(*) AS n "
             "FROM demandes WHERE statut = 'En attente' GROUP BY cl"
         ).fetchall()
+        esc_rows = conn.execute(
+            "SELECT conformite_esc AS c, COUNT(*) AS n "
+            "FROM demandes WHERE statut = 'En attente' AND conformite_esc IS NOT NULL "
+            "GROUP BY conformite_esc"
+        ).fetchall()
 
     counts = {"A": 0, "MBA": 0, "RA": 0}
     for r in rows:
         if r["cl"] in counts:
             counts[r["cl"]] = r["n"]
+
+    esc_counts = {"Adhérent": 0, "Non-adhérent": 0}
+    for r in esc_rows:
+        if r["c"] in esc_counts:
+            esc_counts[r["c"]] = r["n"]
+    total_esc = esc_counts["Adhérent"] + esc_counts["Non-adhérent"]
 
     def fmt(n: int) -> str:
         if total == 0:
@@ -78,6 +97,18 @@ def _render_metrics() -> None:
         st.metric("🟡 May Be Appropriate", fmt(counts["MBA"]))
     with cols[3]:
         st.metric("🔴 Rarely Appropriate", fmt(counts["RA"]))
+
+    # Seconde ligne : métriques ESC (double évaluation)
+    if total_esc > 0:
+        cols2 = st.columns(4)
+        with cols2[0]:
+            st.metric("Évaluées vs ESC", total_esc)
+        with cols2[1]:
+            taux_adh = esc_counts["Adhérent"] / total_esc * 100
+            st.metric("✅ Adhérent ESC", f"{esc_counts['Adhérent']} ({taux_adh:.0f}%)")
+        with cols2[2]:
+            taux_nonadh = esc_counts["Non-adhérent"] / total_esc * 100
+            st.metric("❌ Non-adhérent ESC", f"{esc_counts['Non-adhérent']} ({taux_nonadh:.0f}%)")
 
 
 def _render_filtres():
@@ -139,7 +170,7 @@ def _fetch_demandes(filtre_statut: str, filtres_classif: list[str], tri: str):
     sql = f"""
         SELECT d.*,
                s.contexte_clinique, s.categorie, s.source, s.note_clinique,
-               s.variables_cles
+               s.variables_cles, s.reference_esc, s.divergence_esc
         FROM demandes d
         LEFT JOIN scenarios_auc s ON d.scenario_id = s.id
         WHERE {' AND '.join(where)}
@@ -220,6 +251,25 @@ def _render_demande(d) -> None:
                 )
             st.markdown(f"- Source : {d['source'] or '—'}")
             st.markdown(f"- Note clinique : {d['note_clinique'] or '—'}")
+
+            # Évaluation parallèle ESC (double évaluation)
+            classe_esc = _safe_get(d, "classe_esc")
+            if classe_esc:
+                conf_esc = _safe_get(d, "conformite_esc")
+                ref_esc = _safe_get(d, "reference_esc")
+                div_esc = _safe_get(d, "divergence_esc")
+                st.markdown("**Évaluation ESC (parallèle)**")
+                st.markdown(f"- Classe ESC : **{classe_esc}**")
+                st.markdown(f"- Conformité : **{conf_esc or '—'}**")
+                if ref_esc:
+                    st.markdown(f"- Référence : {ref_esc}")
+                if div_esc and div_esc != "Non":
+                    st.markdown(
+                        f"<div style='background-color:#fff3cd; padding:8px; border-radius:6px; "
+                        f"border-left:4px solid #ffc107; margin-top:4px;'>"
+                        f"<strong>Divergence AUC ↔ ESC :</strong> {div_esc}</div>",
+                        unsafe_allow_html=True,
+                    )
 
         if d["justification_forcage"]:
             st.markdown(
@@ -431,6 +481,8 @@ def _render_export(demandes) -> None:
         "score_auc": d["score_auc"],
         "classification_auto": d["classification"],
         "classification_medecin": d["classification_medecin"],
+        "classe_esc": _safe_get(d, "classe_esc"),
+        "conformite_esc": _safe_get(d, "conformite_esc"),
         "statut": d["statut"],
         "justification_forcage": d["justification_forcage"],
         "decision_medecin": d["decision_medecin"],

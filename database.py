@@ -31,7 +31,11 @@ def init_db() -> None:
                 score_auc         INTEGER NOT NULL CHECK (score_auc BETWEEN 1 AND 9),
                 classification    TEXT NOT NULL CHECK (classification IN ('A', 'MBA', 'RA')),
                 source            TEXT NOT NULL,
-                note_clinique     TEXT
+                note_clinique     TEXT,
+                classe_esc        TEXT,
+                reference_esc     TEXT,
+                conformite_esc    TEXT,
+                divergence_esc    TEXT
             );
 
             CREATE TABLE IF NOT EXISTS demandes (
@@ -42,6 +46,8 @@ def init_db() -> None:
                 scenario_id           TEXT,
                 score_auc             INTEGER,
                 classification        TEXT,
+                classe_esc            TEXT,
+                conformite_esc        TEXT,
                 statut                TEXT NOT NULL,
                 justification_forcage TEXT,
                 FOREIGN KEY (scenario_id) REFERENCES scenarios_auc(id)
@@ -80,13 +86,30 @@ def _migrate_demandes(conn: sqlite3.Connection) -> None:
         "timestamp_ouverture": "TEXT",
         "timestamp_decision": "TEXT",
         "duree_validation_secondes": "INTEGER",
-        "phase_etude": "TEXT DEFAULT 'Phase 3'",
+        "phase_etude": "TEXT DEFAULT 'Audit'",
+        "classe_esc": "TEXT",
+        "conformite_esc": "TEXT",
     }
     for col, sql_type in additions.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE demandes ADD COLUMN {col} {sql_type}")
     # Backfill : les lignes pré-existantes peuvent avoir phase_etude NULL.
-    conn.execute("UPDATE demandes SET phase_etude = 'Phase 3' WHERE phase_etude IS NULL")
+    conn.execute("UPDATE demandes SET phase_etude = 'Audit' WHERE phase_etude IS NULL")
+    _migrate_scenarios(conn)
+
+
+def _migrate_scenarios(conn: sqlite3.Connection) -> None:
+    """Ajoute les colonnes ESC à scenarios_auc si absentes (double évaluation AUC + ESC)."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(scenarios_auc)")}
+    additions = {
+        "classe_esc": "TEXT",
+        "reference_esc": "TEXT",
+        "conformite_esc": "TEXT",
+        "divergence_esc": "TEXT",
+    }
+    for col, sql_type in additions.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE scenarios_auc ADD COLUMN {col} {sql_type}")
 
 
 if __name__ == "__main__":

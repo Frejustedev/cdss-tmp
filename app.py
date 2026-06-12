@@ -107,7 +107,7 @@ if module == "Accueil":
         - **Prescripteur** — saisie et évaluation d'une prescription
         - **Médecin Nucléaire** — validation et compte-rendu
         - **Chercheur** — analyse et export des données
-        - **Référentiel** — AUC ACCF/ASNC 2023 et SPECT-MPI 2009
+        - **Référentiel** — AUC ACCF/ASNC (SPECT-MPI 2009 + préopératoire 2024)
         """
     )
 elif module == "Référentiel":
