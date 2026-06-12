@@ -715,13 +715,13 @@ def _persist_demande() -> None:
         forcage = st.session_state.get("forcage_justification")
 
         conn.execute(
-            "INSERT INTO demandes (id, date_creation, prescripteur, donnees_patient, "
+            # date_creation : DEFAULT now() côté serveur (UTC cohérent).
+            "INSERT INTO demandes (id, prescripteur, donnees_patient, "
             "scenario_id, score_auc, classification, classe_esc, conformite_esc, "
             "statut, justification_forcage) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 demande_id,
-                end_time.isoformat(timespec="seconds"),
                 p["prescripteur_specialite"],
                 json.dumps(donnees, ensure_ascii=False),
                 sid,

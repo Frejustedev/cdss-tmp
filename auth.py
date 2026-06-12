@@ -30,19 +30,12 @@ def log_action(action: str, module: str | None,
     username = user["username"] if user else None
     role = user["role"] if user else None
     with get_connection() as conn:
+        # timestamp : DEFAULT now() côté serveur (UTC cohérent).
         conn.execute(
             "INSERT INTO audit_log "
-            "(timestamp, utilisateur, role, action, module, details, demande_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                datetime.now().isoformat(timespec="seconds"),
-                username,
-                role,
-                action,
-                module,
-                details,
-                demande_id,
-            ),
+            "(utilisateur, role, action, module, details, demande_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (username, role, action, module, details, demande_id),
         )
 
 
@@ -59,11 +52,10 @@ def login(username: str, password: str) -> tuple[bool, str | None, str | None]:
         log_action("Tentative échouée", "Auth", f"Identifiant: {username}", None)
         return False, None, None
 
-    now = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
         conn.execute(
-            "UPDATE utilisateurs SET derniere_connexion = ? WHERE username = ?",
-            (now, username),
+            "UPDATE utilisateurs SET derniere_connexion = now() WHERE username = ?",
+            (username,),
         )
 
     st.session_state[SESSION_KEY] = {

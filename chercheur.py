@@ -31,6 +31,15 @@ PHASE_UI_TO_DB = {
 }
 
 
+def _fmt_dt(val, length: int = 16) -> str:
+    """Formate une date BDD (datetime PostgreSQL ou string ISO SQLite) + None."""
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m-%d %H:%M" if length >= 16 else "%Y-%m-%d")
+    return str(val)[:length].replace("T", " ")
+
+
 def render() -> None:
     st.header("Module Chercheur — Tableau de bord analytique")
 
@@ -107,7 +116,7 @@ def _render_gestion_phases() -> None:
             return
 
         options = [
-            f"{r['id']} — {(r['date_creation'] or '')[:10]} — {r['phase_etude'] or 'NULL'}"
+            f"{r['id']} — {_fmt_dt(r['date_creation'], 10)} — {r['phase_etude'] or 'NULL'}"
             for r in rows
         ]
         id_map = {opt: r["id"] for opt, r in zip(options, rows)}

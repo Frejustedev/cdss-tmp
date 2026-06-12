@@ -30,7 +30,6 @@ def _hash_password(plain: str) -> str:
 def _seed_users() -> int:
     """Insère les comptes par défaut s'ils n'existent pas. Retourne le nombre créé."""
     created = 0
-    now = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
         for u in DEFAULT_USERS:
             row = conn.execute(
@@ -38,16 +37,16 @@ def _seed_users() -> int:
                 (u["username"],),
             ).fetchone()
             if row is None:
+                # date_creation : DEFAULT now() côté serveur.
                 conn.execute(
                     "INSERT INTO utilisateurs "
-                    "(username, password_hash, role, nom_complet, date_creation) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(username, password_hash, role, nom_complet) "
+                    "VALUES (?, ?, ?, ?)",
                     (
                         u["username"],
                         _hash_password(u["password"]),
                         u["role"],
                         u["nom_complet"],
-                        now,
                     ),
                 )
                 created += 1

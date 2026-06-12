@@ -25,6 +25,19 @@ TRIS = [
 ACTIVITES_TMC = "Stress 350 MBq / Repos 1100 MBq (poids-dépendant)"
 
 
+def _fmt_dt(val, length: int = 16) -> str:
+    """Formate une date issue de la BDD pour l'affichage.
+
+    PostgreSQL (TIMESTAMPTZ) renvoie un objet datetime ; l'ancien SQLite
+    renvoyait une string ISO. Gère les deux cas + None.
+    """
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):  # datetime (PostgreSQL)
+        return val.strftime("%Y-%m-%d %H:%M" if length >= 16 else "%Y-%m-%d")
+    return str(val)[:length].replace("T", " ")  # string ISO (SQLite legacy)
+
+
 def _safe_get(row, key, default=None):
     """Accès sûr à une colonne d'un sqlite3.Row (retourne default si absente)."""
     try:
@@ -184,7 +197,7 @@ def _fetch_demandes(filtre_statut: str, filtres_classif: list[str], tri: str):
 def _render_demande(d) -> None:
     classif_effective = d["classification_medecin"] or d["classification"] or "A"
     emoji = EMOJI_CLASSIF.get(classif_effective, "⚪")
-    date_court = (d["date_creation"] or "")[:16].replace("T", " ")
+    date_court = _fmt_dt(d["date_creation"], 16)
     titre = (
         f"{emoji} {d['id']} │ {date_court} │ Score {d['score_auc']}/9 │ "
         f"{d['scenario_id']} │ statut : {d['statut']}"
@@ -192,11 +205,10 @@ def _render_demande(d) -> None:
 
     with st.expander(titre, expanded=False):
         if d["timestamp_ouverture"] is None:
-            now_iso = datetime.now().isoformat(timespec="seconds")
             with get_connection() as conn:
                 conn.execute(
-                    "UPDATE demandes SET timestamp_ouverture = ? WHERE id = ?",
-                    (now_iso, d["id"]),
+                    "UPDATE demandes SET timestamp_ouverture = now() WHERE id = ?",
+                    (d["id"],),
                 )
 
         try:
@@ -384,16 +396,12 @@ def _render_actions(d) -> None:
 
 
 def _perform_action(d, statut: str, commentaire: str | None, reclass: str | None) -> None:
-    """Persiste la décision médecin avec horodatage et durée d'évaluation."""
-    now = datetime.now()
-    duree = None
-    if d["timestamp_ouverture"]:
-        try:
-            ouv = datetime.fromisoformat(d["timestamp_ouverture"])
-            duree = int((now - ouv).total_seconds())
-        except ValueError:
-            duree = None
+    """Persiste la décision médecin.
 
+    timestamp_decision et la durée de validation sont calculés côté serveur
+    PostgreSQL (now()) pour éviter toute ambiguïté de fuseau horaire avec les
+    colonnes TIMESTAMPTZ.
+    """
     with get_connection() as conn:
         conn.execute(
             """
@@ -401,18 +409,12 @@ def _perform_action(d, statut: str, commentaire: str | None, reclass: str | None
                SET statut = ?,
                    decision_medecin = ?,
                    classification_medecin = ?,
-                   timestamp_decision = ?,
-                   duree_validation_secondes = ?
+                   timestamp_decision = now(),
+                   duree_validation_secondes =
+                       GREATEST(0, EXTRACT(EPOCH FROM (now() - timestamp_ouverture)))::int
              WHERE id = ?
             """,
-            (
-                statut,
-                commentaire,
-                reclass,
-                now.isoformat(timespec="seconds"),
-                duree,
-                d["id"],
-            ),
+            (statut, commentaire, reclass, d["id"]),
         )
 
     # Traçabilité
@@ -437,7 +439,7 @@ def _perform_action(d, statut: str, commentaire: str | None, reclass: str | None
 
 def _render_decision_info(d) -> None:
     statut = d["statut"]
-    date_dec = (d["timestamp_decision"] or "")[:16].replace("T", " ")
+    date_dec = _fmt_dt(d["timestamp_decision"], 16)
     if statut == "Validée":
         st.success(f"✅ Demande validée le {date_dec}")
     elif statut == "Rejetée":
